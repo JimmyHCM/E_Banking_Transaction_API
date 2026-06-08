@@ -1,0 +1,40 @@
+@startuml C4_Context
+
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+' ── Diagram metadata ────────────────────────────────────────────────────────
+LAYOUT_WITH_LEGEND()
+title C4 Context Diagram — e-Banking Transaction API
+
+' ── People ──────────────────────────────────────────────────────────────────
+Person(customer, "e-Banking Customer", \
+    "An authenticated bank customer browsing\ntransaction history in the portal.\nIdentified by a JWT sub claim (e.g. P-0123456789).")
+
+' ── Our system ──────────────────────────────────────────────────────────────
+System(txApi, "e-Banking Transaction API", \
+    "Exposes a paginated REST API for transaction\nhistory with per-page FX-converted totals.\nBuilt with Spring Boot, deployed on Kubernetes.")
+
+' ── External systems ────────────────────────────────────────────────────────
+System_Ext(idp, "Identity Provider", \
+    "Issues and signs OAuth2 JWT access tokens.\nThe Transaction API validates tokens against\nthe IdP's published JWKS endpoint.")
+
+System_Ext(kafka, "Kafka Cluster", \
+    "Append-only event log of all bank transactions.\nTopic: 'transactions' — key = txId, value = JSON.\nCovers the last ten years (~10^11 events).")
+
+System_Ext(fxProvider, "FX Rate Provider", \
+    "Third-party REST API supplying exchange rates\nfor any currency pair on a given date.\n(e.g. open.er-api.com or similar)")
+
+' ── Relationships ───────────────────────────────────────────────────────────
+Rel(customer, txApi, "Queries transaction history", \
+    "HTTPS / REST (Bearer JWT)")
+
+Rel(txApi, idp, "Validates JWT signature + claims", \
+    "HTTPS — JWKS endpoint")
+
+Rel(txApi, fxProvider, "Fetches exchange rates for page totals", \
+    "HTTPS — REST (cached, with circuit breaker)")
+
+Rel(kafka, txApi, "Streams transaction events", \
+    "Kafka Consumer (SASL/TLS)")
+
+@enduml

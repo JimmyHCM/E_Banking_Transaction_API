@@ -1,0 +1,100 @@
+spring:
+  application:
+    name: transaction-api
+
+  # ── Database ──────────────────────────────────────────────────────────────
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/transactions}
+    username: ${DB_USER:txuser}
+    password: ${DB_PASSWORD:changeme}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 3000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate        # Flyway owns the schema; Hibernate only validates
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  # ── Flyway ────────────────────────────────────────────────────────────────
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  # ── Kafka ─────────────────────────────────────────────────────────────────
+  kafka:
+    bootstrap-servers: ${KAFKA_BROKERS:localhost:9092}
+    consumer:
+      group-id: tx-projector
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "com.ebanking.transaction.kafka"
+        spring.json.value.default.type: "com.ebanking.transaction.kafka.TransactionEvent"
+
+  # ── Security (JWT resource server) ───────────────────────────────────────
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${JWT_ISSUER_URI:https://auth.example-bank.com}
+
+  # ── Cache ────────────────────────────────────────────────────────────────
+  cache:
+    type: caffeine
+
+# ── Server ────────────────────────────────────────────────────────────────
+server:
+  port: 8080
+
+# ── Actuator ──────────────────────────────────────────────────────────────
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus, metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true        # exposes /actuator/health/liveness + /readiness
+      show-details: always
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+# ── Application-specific ──────────────────────────────────────────────────
+app:
+  kafka:
+    topic: ${KAFKA_TOPIC:transactions}
+  fx:
+    base-url: ${FX_API_BASE_URL:https://open.er-api.com/v6}
+    default-currency: EUR
+
+# ── Resilience4j ──────────────────────────────────────────────────────────
+resilience4j:
+  circuitbreaker:
+    instances:
+      fxProvider:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+  retry:
+    instances:
+      fxProvider:
+        max-attempts: 3
+        wait-duration: 500ms
+
+# ── Springdoc / Swagger UI ────────────────────────────────────────────────
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+  default-produces-media-type: application/json

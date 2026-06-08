@@ -1,0 +1,545 @@
+openapi: 3.0.3
+
+info:
+  title: e-Banking Transactions API
+  version: 1.0.0
+  description: |
+    Returns the paginated list of money-account transactions created in a given
+    calendar month for the **currently authenticated customer**.
+
+    ## Identity & authorization
+    The customer is identified **exclusively** from the validated JWT (claim
+    `sub`, e.g. `P-0123456789`). There is intentionally no `customerId` request
+    parameter: a client can only ever read its own transactions. Supplying a
+    token for one customer can never return another customer's data.
+
+    ## Reading model (CQRS)
+    Transactions are ingested from a Kafka topic (source of truth) and projected
+    into a query-optimized read store. This endpoint serves only from that
+    projection; it never queries Kafka directly. The projection is rebuildable by
+    replaying the topic.
+
+    ## Page-level totals
+    For each returned page, `totals` contains the sum of credits and the sum of
+    debits **for the transactions on that page**, converted to a single target
+    currency at the current exchange rate from the external FX provider. The
+    `rateDate` and the exact `fxRatesApplied` per currency pair are echoed back
+    for auditability.
+
+    ## Money representation
+    Monetary amounts are serialized as decimal **strings** (not JSON numbers) to
+    preserve precision. Parse them with a decimal type (e.g. `BigDecimal`).
+  contact:
+    name: e-Banking Platform Team
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://api.example-bank.com
+    description: Production
+  - url: https://api-staging.example-bank.com
+    description: Staging
+  - url: http://localhost:8080
+    description: Local development
+
+tags:
+  - name: Transactions
+    description: Customer money-account transactions.
+  - name: Operations
+    description: Health probes and operational endpoints (no authentication required).
+
+security:
+  - bearerAuth: []
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+
+  # --------------------------------------------------------------------------
+  # 1. List transactions (primary endpoint)
+  # --------------------------------------------------------------------------
+  /api/v1/transactions:
+    get:
+      tags: [Transactions]
+      operationId: getTransactionsForMonth
+      summary: List the authenticated customer's transactions for a calendar month
+      description: |
+        Returns a paginated page of the authenticated customer's transactions
+        whose value date falls within the requested calendar month, sorted by
+        value date descending. Each page includes credit/debit totals converted
+        to the target currency at the current FX rate.
+
+        **Authorization:** `customerId` is derived exclusively from the JWT `sub`
+        claim — it is never accepted as a request parameter (prevents IDOR).
+      parameters:
+        - $ref: '#/components/parameters/yearParam'
+        - $ref: '#/components/parameters/monthParam'
+        - $ref: '#/components/parameters/currencyParam'
+        - $ref: '#/components/parameters/pageParam'
+        - $ref: '#/components/parameters/sizeParam'
+      responses:
+        '200':
+          description: A page of transactions with page-level FX totals.
+          headers:
+            X-Correlation-Id:
+              description: Correlation / trace ID for this request.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionPage'
+              examples:
+                october2020:
+                  $ref: '#/components/examples/TransactionPageExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '502':
+          $ref: '#/components/responses/FxUnavailable'
+
+  # --------------------------------------------------------------------------
+  # 2. Get single transaction by ID
+  # --------------------------------------------------------------------------
+  /api/v1/transactions/{transactionId}:
+    get:
+      tags: [Transactions]
+      operationId: getTransactionById
+      summary: Get a single transaction by ID
+      description: |
+        Returns the full detail of one transaction. The transaction must belong
+        to the JWT-authenticated customer; otherwise `403` is returned.
+      parameters:
+        - name: transactionId
+          in: path
+          required: true
+          description: Unique transaction identifier.
+          schema:
+            type: string
+          example: 89d3o179-abcd-465b-o9ee-e2d5f6ofeld46
+      responses:
+        '200':
+          description: Transaction detail.
+          headers:
+            X-Correlation-Id:
+              description: Correlation / trace ID for this request.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # --------------------------------------------------------------------------
+  # 3. Kubernetes liveness probe
+  # --------------------------------------------------------------------------
+  /actuator/health/liveness:
+    get:
+      tags: [Operations]
+      operationId: livenessProbe
+      summary: Kubernetes liveness probe
+      description: Returns `200` when the application process is healthy.
+      security: []
+      responses:
+        '200':
+          description: Application is alive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+              example:
+                status: UP
+        '503':
+          description: Application is not healthy.
+
+  # --------------------------------------------------------------------------
+  # 4. Kubernetes readiness probe
+  # --------------------------------------------------------------------------
+  /actuator/health/readiness:
+    get:
+      tags: [Operations]
+      operationId: readinessProbe
+      summary: Kubernetes readiness probe
+      description: |
+        Returns `200` when all dependencies (PostgreSQL read store, Kafka consumer)
+        are reachable and the service can handle traffic.
+      security: []
+      responses:
+        '200':
+          description: Application is ready to serve traffic.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessStatus'
+              example:
+                status: UP
+                components:
+                  db:
+                    status: UP
+                  kafka:
+                    status: UP
+        '503':
+          description: One or more dependencies are unavailable.
+
+# ---------------------------------------------------------------------------
+# Components
+# ---------------------------------------------------------------------------
+components:
+
+  # -------------------------------------------------------------------------
+  # Security schemes
+  # -------------------------------------------------------------------------
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        OAuth2 JWT access token. Validated as a resource-server token (signature
+        verified against the issuer JWKS). The customer identity is taken from
+        the `sub` claim.
+
+  # -------------------------------------------------------------------------
+  # Reusable parameters
+  # -------------------------------------------------------------------------
+  parameters:
+
+    yearParam:
+      name: year
+      in: query
+      required: true
+      description: Calendar year of the value date (Gregorian).
+      schema:
+        type: integer
+        minimum: 1900
+        maximum: 2100
+      example: 2020
+
+    monthParam:
+      name: month
+      in: query
+      required: true
+      description: Calendar month of the value date (1 = January … 12 = December).
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 12
+      example: 10
+
+    currencyParam:
+      name: currency
+      in: query
+      required: false
+      description: |
+        ISO 4217 target currency for the page totals. Defaults to the service's
+        configured base currency when omitted.
+      schema:
+        type: string
+        pattern: '^[A-Z]{3}$'
+      example: CHF
+
+    pageParam:
+      name: page
+      in: query
+      required: false
+      description: Zero-based page index.
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+      example: 0
+
+    sizeParam:
+      name: size
+      in: query
+      required: false
+      description: Number of transactions per page.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+      example: 50
+
+  # -------------------------------------------------------------------------
+  # Reusable schemas
+  # -------------------------------------------------------------------------
+  schemas:
+
+    Money:
+      type: object
+      description: A monetary amount in a single ISO 4217 currency.
+      required: [amount, currency]
+      properties:
+        amount:
+          type: string
+          description: Decimal amount serialized as a string to preserve precision.
+          example: "100.00"
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          example: GBP
+
+    Transaction:
+      type: object
+      description: A single money-account transaction.
+      required: [id, money, iban, valueDate, description]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          description: Unique transaction identifier.
+          example: 89d3o179-abcd-465b-o9ee-e2d5f6ofeld46
+        money:
+          $ref: '#/components/schemas/Money'
+        iban:
+          type: string
+          description: Account IBAN the transaction belongs to.
+          example: CH93-0000-0000-0000-0000-0
+        valueDate:
+          type: string
+          format: date
+          description: Value date (ISO 8601, yyyy-MM-dd).
+          example: "2020-10-01"
+        description:
+          type: string
+          description: Human-readable transaction description.
+          example: Online payment CHF
+
+    PageTotals:
+      type: object
+      description: |
+        Credit and debit sums for the transactions on this page, converted to
+        `currency` at the FX rate effective on `rateDate`.
+      required: [currency, rateDate, totalCredit, totalDebit]
+      properties:
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          description: Target currency the totals are expressed in.
+          example: CHF
+        rateDate:
+          type: string
+          format: date
+          description: Date of the exchange rates used for conversion.
+          example: "2026-06-08"
+        totalCredit:
+          type: string
+          description: Sum of positive (incoming) amounts on this page, as a decimal string.
+          example: "1540.75"
+        totalDebit:
+          type: string
+          description: Sum of negative (outgoing) amounts on this page, as a positive magnitude decimal string.
+          example: "820.10"
+        fxRatesApplied:
+          type: object
+          description: |
+            Map of `FROM_CCY/TO_CCY` pairs to the exact exchange rates used.
+            Only currencies present on this page are included. Useful for
+            client-side auditability and debugging.
+          additionalProperties:
+            type: string
+            description: Exchange rate as a decimal string.
+          example:
+            GBP/CHF: "1.1120"
+            EUR/CHF: "0.9831"
+
+    PageMetadata:
+      type: object
+      required: [page, size, totalElements, totalPages]
+      properties:
+        page:
+          type: integer
+          description: Zero-based index of the returned page.
+          example: 0
+        size:
+          type: integer
+          description: Requested page size.
+          example: 50
+        totalElements:
+          type: integer
+          format: int64
+          description: Total number of transactions matching the query.
+          example: 1832
+        totalPages:
+          type: integer
+          description: Total number of pages available.
+          example: 37
+
+    TransactionPage:
+      type: object
+      required: [content, totals, page]
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/Transaction'
+        totals:
+          $ref: '#/components/schemas/PageTotals'
+        page:
+          $ref: '#/components/schemas/PageMetadata'
+
+    Problem:
+      type: object
+      description: RFC 7807 problem detail.
+      properties:
+        type:
+          type: string
+          format: uri
+          example: https://api.example-bank.com/problems/validation
+        title:
+          type: string
+          example: Invalid request parameter
+        status:
+          type: integer
+          example: 400
+        detail:
+          type: string
+          example: "Parameter 'month' must be between 1 and 12."
+        instance:
+          type: string
+          example: /api/v1/transactions
+        traceId:
+          type: string
+          description: Distributed trace ID for log correlation.
+          example: 4bf92f3577b34da6a3ce929d0e0e4736
+
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [UP, DOWN]
+          example: UP
+
+    ReadinessStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [UP, DOWN]
+          example: UP
+        components:
+          type: object
+          properties:
+            db:
+              $ref: '#/components/schemas/HealthStatus'
+            kafka:
+              $ref: '#/components/schemas/HealthStatus'
+
+  # -------------------------------------------------------------------------
+  # Reusable responses
+  # -------------------------------------------------------------------------
+  responses:
+
+    BadRequest:
+      description: Invalid request parameters (e.g. month out of range).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.example-bank.com/problems/validation
+            title: Invalid request parameter
+            status: 400
+            detail: "Parameter 'month' must be between 1 and 12."
+            instance: /api/v1/transactions
+
+    Unauthorized:
+      description: Missing, malformed, or invalid JWT.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.example-bank.com/problems/unauthorized
+            title: Unauthorized
+            status: 401
+            detail: Authentication token is missing or invalid.
+            instance: /api/v1/transactions
+
+    Forbidden:
+      description: Token is valid but the resource does not belong to this customer.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.example-bank.com/problems/forbidden
+            title: Forbidden
+            status: 403
+            detail: You are not authorised to access this resource.
+            instance: /api/v1/transactions
+
+    NotFound:
+      description: The requested transaction does not exist.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.example-bank.com/problems/not-found
+            title: Not Found
+            status: 404
+            detail: Transaction not found.
+            instance: /api/v1/transactions/89d3o179-abcd-465b-o9ee-e2d5f6ofeld46
+
+    FxUnavailable:
+      description: |
+        The external FX provider could not be reached and no acceptable fallback
+        rate was available, so page totals could not be computed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.example-bank.com/problems/fx-unavailable
+            title: Exchange rate provider unavailable
+            status: 502
+            detail: Could not obtain an exchange rate to compute page totals.
+            instance: /api/v1/transactions
+
+  # -------------------------------------------------------------------------
+  # Reusable examples
+  # -------------------------------------------------------------------------
+  examples:
+    TransactionPageExample:
+      summary: October 2020, first page
+      value:
+        content:
+          - id: 89d3o179-abcd-465b-o9ee-e2d5f6ofeld46
+            money:
+              amount: "100.00"
+              currency: GBP
+            iban: CH93-0000-0000-0000-0000-0
+            valueDate: "2020-10-01"
+            description: Online payment GBP
+          - id: 12a4b567-ccdd-489a-b1ff-a3c7d8e9f012
+            money:
+              amount: "75.00"
+              currency: CHF
+            iban: CH93-0000-0000-0000-0000-0
+            valueDate: "2020-10-03"
+            description: Card payment CHF
+        totals:
+          currency: CHF
+          rateDate: "2026-06-08"
+          totalCredit: "118.20"
+          totalDebit: "75.00"
+          fxRatesApplied:
+            GBP/CHF: "1.1820"
+        page:
+          page: 0
+          size: 50
+          totalElements: 1832
+          totalPages: 37

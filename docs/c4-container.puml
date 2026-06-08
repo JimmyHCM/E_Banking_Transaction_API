@@ -1,0 +1,60 @@
+@startuml C4_Container
+
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+' ── Diagram metadata ────────────────────────────────────────────────────────
+LAYOUT_WITH_LEGEND()
+title C4 Container Diagram — e-Banking Transaction API
+
+' ── People ──────────────────────────────────────────────────────────────────
+Person(customer, "e-Banking Customer", \
+    "Authenticated bank customer.\nJWT sub = P-0123456789.")
+
+' ── External systems ────────────────────────────────────────────────────────
+System_Ext(idp, "Identity Provider", \
+    "Issues OAuth2 JWTs.\nExposes a JWKS endpoint.")
+
+System_Ext(kafka, "Kafka Cluster", \
+    "Topic: 'transactions'\nkey = txId  |  value = JSON\n~10^11 events, last 10 years.")
+
+System_Ext(fxProvider, "FX Rate Provider", \
+    "Third-party REST API.\nReturns exchange rates for a\ngiven currency pair and date.")
+
+' ── System boundary: e-Banking Transaction API ──────────────────────────────
+System_Boundary(txSystem, "e-Banking Transaction API  [Spring Boot / Kubernetes]") {
+
+    Container(restApi, "REST API Layer", \
+        "Spring MVC + Spring Security\n(OAuth2 Resource Server)", \
+        "Receives authenticated HTTP requests.\nValidates JWT, extracts customerId from\n'sub' claim, enforces authorization.\nExposes paginated /api/v1/transactions\nand single-transaction endpoints.")
+
+    Container(txService, "Transaction Query Service", \
+        "Spring Service (Java)", \
+        "Queries the read store for a customer's\ntransactions in a given calendar month.\nApplies LIMIT/OFFSET pagination.\nOrchestrates FX conversion for page totals.")
+
+    Container(fxService, "FX Rate Service", \
+        "Spring Service + Caffeine Cache\n+ Resilience4j Circuit Breaker", \
+        "Fetches current exchange rates from the\nexternal FX provider. Results are cached\nby (fromCcy, toCcy, date) with a short TTL.\nFalls back to last-known-good rate on failure.")
+
+    Container(projector, "Kafka Projector", \
+        "Spring @KafkaListener (Java)\nConsumer group: tx-projector", \
+        "Consumes the 'transactions' Kafka topic.\nDeserialises JSON events with a tolerant\nreader (ignores unknown fields).\nUpserts records into the read store.\nScales with Kafka partition count.")
+
+    ContainerDb(readStore, "Transaction Read Store", \
+        "PostgreSQL 15", \
+        "Query-optimised projection of all\ntransactions. Composite B-tree index on\n(customer_id, value_date). Rebuilt at any\ntime by replaying the Kafka topic.\nSchema managed by Flyway.")
+
+}
+
+' ── Relationships: external → system ────────────────────────────────────────
+Rel(customer,    restApi,    "GET /api/v1/transactions",       "HTTPS REST — Bearer JWT")
+Rel(restApi,     idp,        "Validate JWT / fetch JWKS",      "HTTPS")
+Rel(kafka,       projector,  "Consume transaction events",     "Kafka — SASL/TLS")
+
+' ── Relationships: internal ──────────────────────────────────────────────────
+Rel(restApi,     txService,  "Delegate query + totals",        "In-process call")
+Rel(txService,   readStore,  "SELECT with pagination",         "JDBC / Spring Data JPA")
+Rel(txService,   fxService,  "Get exchange rates for page",    "In-process call")
+Rel(fxService,   fxProvider, "Fetch rate (cache miss)",        "HTTPS REST")
+Rel(projector,   readStore,  "UPSERT transaction rows",        "JDBC / Spring Data JPA")
+
+@enduml

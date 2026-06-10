@@ -1,0 +1,185 @@
+# ConfigMap — non-sensitive runtime configuration.
+# Sensitive values (FX API key, DB credentials, JWT config) go in transactions-secrets.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: transactions-config
+  labels:
+    app: transactions-api
+data:
+  # Kafka
+  KAFKA_BROKERS: "kafka-broker:9092"
+  APP_KAFKA_TOPIC: "transactions"
+  APP_KAFKA_CONCURRENCY: "3"
+  # FX provider base URL (no key here — key is in the Secret)
+  APP_FX_BASE_URL: "https://open.er-api.com/v6/latest"
+
+---
+# Secret — sensitive values only.  In production, populate via an external
+# secrets manager (e.g. Azure Key Vault, AWS Secrets Manager) rather than
+# committing values to this file.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: transactions-secrets
+  labels:
+    app: transactions-api
+type: Opaque
+stringData:
+  DB_URL: "jdbc:postgresql://postgres:5432/transactions"
+  DB_USER: "txuser"
+  DB_PASSWORD: "<REPLACE_WITH_SECRET>"
+  APP_FX_API_KEY: "<REPLACE_WITH_SECRET>"
+  JWT_ISSUER_URI: "https://auth.example-bank.com"
+
+---
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transactions-api
+  labels:
+    app: transactions-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: transactions-api
+  template:
+    metadata:
+      labels:
+        app: transactions-api
+      annotations:
+        # Prometheus scrape annotations (fallback for clusters without ServiceMonitor CRD)
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/actuator/prometheus"
+        prometheus.io/port: "8080"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: transactions-api
+          image: registry.example.com/transactions-api:1.0.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: transactions-config
+            - secretRef:
+                name: transactions-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          # Readiness gates traffic: pod only receives requests after Kafka and
+          # Postgres connections are up.  Spring Boot Actuator exposes this probe
+          # out of the box when management.endpoint.health.probes.enabled=true.
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          # Liveness restarts a genuinely stuck process; deliberately later than
+          # readiness to avoid premature restarts during startup.
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+
+---
+# Service — ClusterIP; fronted by an Ingress (or OpenShift Route)
+apiVersion: v1
+kind: Service
+metadata:
+  name: transactions-api
+  labels:
+    app: transactions-api
+spec:
+  selector:
+    app: transactions-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
+
+---
+# HorizontalPodAutoscaler — scales the *API* deployment on CPU utilisation.
+#
+# Design note: the Kafka projector and the API scale on different signals.
+# The API scales here on request CPU/latency.  The projector should scale on
+# Kafka consumer lag (KEDA or a custom metric), and its replica count is bounded
+# by the topic's partition count — more pods than partitions leaves pods idle.
+# In production, split these into two Deployments so they can scale independently.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: transactions-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: transactions-api
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+---
+# Ingress (Kubernetes) — adapt host and annotations for your cluster.
+# For OpenShift, replace this with a Route resource.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: transactions-api
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  rules:
+    - host: api.example-bank.com
+      http:
+        paths:
+          - path: /api/v1/transactions
+            pathType: Prefix
+            backend:
+              service:
+                name: transactions-api
+                port:
+                  number: 80
+  tls:
+    - hosts:
+        - api.example-bank.com
+      secretName: transactions-api-tls
+
+---
+# ServiceMonitor — lets Prometheus (via kube-prometheus-stack) scrape /actuator/prometheus.
+# Only applies if the Prometheus Operator CRD is installed in your cluster.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: transactions-api
+  labels:
+    app: transactions-api
+spec:
+  selector:
+    matchLabels:
+      app: transactions-api
+  endpoints:
+    - port: http
+      path: /actuator/prometheus
+      interval: 30s

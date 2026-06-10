@@ -51,10 +51,10 @@ public class FxRateService {
         return rate;
     }
 
-    /** Resilience4j fallback — same signature + {@code Throwable}. */
+    /** Resilience4j fallback — same signature + {@code Throwable}. Package-private for unit testing. */
     @SuppressWarnings("unused")
-    private BigDecimal fallbackRate(String fromCurrency, String targetCurrency,
-                                    LocalDate date, Throwable cause) {
+    BigDecimal fallbackRate(String fromCurrency, String targetCurrency,
+                            LocalDate date, Throwable cause) {
         BigDecimal cached = lastKnownRates.get(new FxRateKey(fromCurrency, targetCurrency, date));
         if (cached != null) {
             log.warn("FX provider unavailable; using last-known rate for {}/{} on {}: {}",

@@ -128,8 +128,8 @@ public class TransactionQueryService {
         return new PageTotalsDto(
                 currency,
                 rateDate.toString(),
-                credit.toPlainString(),
-                debit.toPlainString(),
+                credit.setScale(2, RoundingMode.HALF_UP).toPlainString(),
+                debit.setScale(2, RoundingMode.HALF_UP).toPlainString(),
                 ratesStr
         );
     }

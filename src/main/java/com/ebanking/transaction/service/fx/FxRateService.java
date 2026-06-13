@@ -2,6 +2,7 @@ package com.ebanking.transaction.service.fx;
 
 import com.ebanking.transaction.config.CacheConfig;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.annotation.Cacheable;
@@ -44,6 +45,7 @@ public class FxRateService {
      */
     @Cacheable(value = CacheConfig.FX_RATES_CACHE)
     @CircuitBreaker(name = "fxProvider", fallbackMethod = "fallbackRate")
+    @Retry(name = "fxProvider")
     public BigDecimal getRate(String fromCurrency, String targetCurrency, LocalDate date) {
         BigDecimal rate = client.fetchRate(fromCurrency, targetCurrency, date);
         lastKnownRates.put(new FxRateKey(fromCurrency, targetCurrency, date), rate);

@@ -1,0 +1,22 @@
+{
+  "mappings": [
+    {
+      "request": {
+        "method": "GET",
+        "urlPattern": "/.*"
+      },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": {
+          "rates": {
+            "EUR": 1.10,
+            "CHF": 1.18,
+            "GBP": 1.00,
+            "USD": 1.27
+          }
+        }
+      }
+    }
+  ]
+}

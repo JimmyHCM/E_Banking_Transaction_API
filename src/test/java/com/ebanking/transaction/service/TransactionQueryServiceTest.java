@@ -72,7 +72,7 @@ class TransactionQueryServiceTest {
         when(repository.findByCustomerIdAndValueDateBetweenOrderByValueDateDesc(
                 eq("P-0123456789"), any(), any(), any()))
                 .thenReturn(new PageImpl<>(List.of(gbpCredit, chfDebit)));
-        when(fxRateService.getRate("GBP", "CHF", any())).thenReturn(new BigDecimal("1.18"));
+        when(fxRateService.getRate(eq("GBP"), eq("CHF"), any())).thenReturn(new BigDecimal("1.18"));
 
         TransactionPageResponse response =
                 queryService.getTransactions("P-0123456789", 2020, 10, "CHF", 0, 50);
@@ -149,7 +149,7 @@ class TransactionQueryServiceTest {
         when(repository.findByCustomerIdAndValueDateBetweenOrderByValueDateDesc(
                 eq("P-0123456789"), any(), any(), any()))
                 .thenReturn(new PageImpl<>(List.of(chfCredit)));
-        when(fxRateService.getRate("CHF", "EUR", any()))
+        when(fxRateService.getRate(eq("CHF"), eq("EUR"), any()))
                 .thenReturn(new BigDecimal("1").divide(new BigDecimal("3"),
                         10, java.math.RoundingMode.HALF_UP));
 

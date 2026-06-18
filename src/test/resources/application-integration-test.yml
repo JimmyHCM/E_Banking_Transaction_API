@@ -12,11 +12,17 @@ spring:
     consumer:
       group-id: tx-projector-it
       auto-offset-reset: earliest
+      # Match production: deserialize the JSON payload straight into TransactionEvent.
+      # (StringDeserializer here would hand the listener a raw String and fail with
+      # MessageConversionException.)
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       properties:
         spring.json.trusted.packages: "com.ebanking.transaction.kafka"
         spring.json.value.default.type: "com.ebanking.transaction.kafka.TransactionEvent"
+        # The IT's raw producer sends no __TypeId__ header, so always use the
+        # default type above instead of looking for a type header.
+        spring.json.use.type.headers: false
 
   jpa:
     hibernate:

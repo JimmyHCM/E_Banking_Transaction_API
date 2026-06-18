@@ -36,6 +36,10 @@ spring:
       properties:
         spring.json.trusted.packages: "com.ebanking.transaction.kafka"
         spring.json.value.default.type: "com.ebanking.transaction.kafka.TransactionEvent"
+        # The topic carries plain JSON (no Spring type headers), so always map to the
+        # default type rather than trusting a __TypeId__ header that may be absent or
+        # point at a producer-side class.
+        spring.json.use.type.headers: false
 
   # ── Security (JWT resource server) ───────────────────────────────────────
   security:

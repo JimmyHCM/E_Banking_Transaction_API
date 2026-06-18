@@ -1,5 +1,7 @@
 # e-Banking Transaction API
 
+[![CircleCI](https://dl.circleci.com/status-badge/img/gh/JimmyHCM/E_Banking_Transaction_API/tree/main.svg?style=svg)](https://app.circleci.com/pipelines/github/JimmyHCM/E_Banking_Transaction_API)
+
 A paginated transaction-history API built as a **CQRS read model**. Transaction
 events are consumed from Kafka and projected into a PostgreSQL read table; the HTTP
 API serves paginated, per-month transaction history with on-the-fly currency
@@ -142,10 +144,6 @@ PostgreSQL containers, WireMock for the FX provider) on the `machine` executor.
 JUnit results appear in the CircleCI *Tests* tab; the JaCoCo coverage report is
 stored as a build artifact.
 
-> **Setup:** connect this repository at https://app.circleci.com (Projects → Set
-> Up Project → use the existing `.circleci/config.yml`). After the first green run,
-> add the status badge here:
->
-> ```
-> [![CircleCI](https://dl.circleci.com/status-badge/img/gh/JimmyHCM/E_Banking_Transaction_API/tree/main.svg?style=svg)](https://app.circleci.com/pipelines/github/JimmyHCM/E_Banking_Transaction_API)
-> ```
+**Pipeline:** https://app.circleci.com/pipelines/github/JimmyHCM/E_Banking_Transaction_API
+(the `build-and-test` job runs the full `clean verify`, unit + integration tests
+included — see the green run on `main`, status reflected in the badge above).

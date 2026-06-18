@@ -21,6 +21,15 @@ jobs:
       JAVA_HOME: /usr/lib/jvm/temurin-21-jdk-amd64
       # Make the JVM respect the CI container's memory limits.
       MAVEN_OPTS: -XX:MaxRAMPercentage=70.0
+      # Point docker-java (used by Testcontainers) straight at the local daemon
+      # socket. The machine executor has Docker, but Testcontainers' auto-detection
+      # can fail to validate it ("Could not find a valid Docker environment");
+      # setting DOCKER_HOST explicitly forces the correct strategy.
+      DOCKER_HOST: unix:///var/run/docker.sock
+      # Ryuk (the Testcontainers resource reaper) is unnecessary on an ephemeral CI
+      # VM that is destroyed after the job, and disabling it avoids reaper startup
+      # flakiness.
+      TESTCONTAINERS_RYUK_DISABLED: "true"
     steps:
       - checkout
 
@@ -38,8 +47,12 @@ jobs:
             echo 'export PATH=$JAVA_HOME/bin:$PATH' >> "$BASH_ENV"
 
       - run:
-          name: Java version
-          command: java -version
+          name: Verify Java and Docker
+          command: |
+            java -version
+            sudo systemctl start docker || true
+            docker version
+            docker info | head -n 20
 
       - restore_cache:
           keys:
@@ -55,11 +68,21 @@ jobs:
           paths:
             - ~/.m2/repository
 
-      # Surface JUnit results in the CircleCI "Tests" tab.
+      # Collect only the JUnit report XMLs into a clean directory. The Failsafe
+      # plugin also writes a `failsafe-summary.xml` into target/failsafe-reports/,
+      # which is NOT a JUnit document and makes store_test_results fail with
+      # "invalid top level element: failsafe-summary" — so we copy TEST-*.xml only.
+      # Runs on success or failure so results are always uploaded.
+      - run:
+          name: Collect JUnit results
+          command: |
+            mkdir -p ~/test-results/junit
+            find . -path '*/target/surefire-reports/TEST-*.xml' -exec cp {} ~/test-results/junit/ \; 2>/dev/null || true
+            find . -path '*/target/failsafe-reports/TEST-*.xml' -exec cp {} ~/test-results/junit/ \; 2>/dev/null || true
+          when: always
+
       - store_test_results:
-          path: target/surefire-reports
-      - store_test_results:
-          path: target/failsafe-reports
+          path: ~/test-results/junit
 
       # Keep the JaCoCo coverage report and the built jar as build artifacts.
       - store_artifacts:
@@ -68,6 +91,7 @@ jobs:
       - store_artifacts:
           path: target
           destination: build
+          # The jar lives at target/*.jar; "build" keeps it alongside reports.
 
 workflows:
   ci:

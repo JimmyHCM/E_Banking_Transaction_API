@@ -55,8 +55,10 @@ public class TransactionController {
     /**
      * GET /api/v1/transactions/{transactionId}
      *
-     * Returns 403 (not 404) when the transaction exists but belongs to a different
-     * customer, to avoid leaking the existence of other customers' records.
+     * Returns 404 when the transaction does not exist OR belongs to a different
+     * customer — the two cases are indistinguishable by design, so the existence
+     * of another customer's records is never leaked (ownership is enforced in the
+     * repository query, see {@link TransactionQueryService#getTransactionById}).
      */
     @GetMapping("/{transactionId}")
     public ResponseEntity<TransactionDto> getTransactionById(

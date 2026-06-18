@@ -1,5 +1,6 @@
-# Draft / planning notes
-*.md
+# Draft / planning notes (keep README and docs)
+/scratch*.md
+/NOTES.md
 
 # Compiled class files
 *.class

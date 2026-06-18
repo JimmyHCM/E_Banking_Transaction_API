@@ -2,6 +2,7 @@ package com.ebanking.transaction.service.fx;
 
 import com.ebanking.transaction.config.CacheConfig;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.annotation.Cacheable;
@@ -19,10 +20,16 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li><b>Caffeine cache</b> — results are cached for 5 minutes (configured in
  *       {@link CacheConfig}) so the external provider is called at most once per
  *       currency pair per cache window.</li>
+ *   <li><b>Resilience4j retry</b> — up to 3 attempts (500 ms apart) on a transient
+ *       provider failure before the call is considered failed.</li>
  *   <li><b>Resilience4j circuit breaker</b> — opens after 50 % failures in a
- *       10-call sliding window; falls back to the last-known-good rate, or throws
+ *       10-call sliding window. Once retries are exhausted (or the breaker is open)
+ *       the fallback returns the last-known-good rate, or throws
  *       {@link FxRateUnavailableException} if no prior rate exists.</li>
  * </ol>
+ *
+ * <p>The {@code @Retry} aspect wraps {@code @CircuitBreaker} (Resilience4j's default
+ * ordering), so the fallback fires only after all retry attempts have failed.
  */
 @Service
 public class FxRateService {
@@ -43,7 +50,8 @@ public class FxRateService {
      * Result is cached; on provider failure the last-known-good rate is returned.
      */
     @Cacheable(value = CacheConfig.FX_RATES_CACHE)
-    @CircuitBreaker(name = "fxProvider", fallbackMethod = "fallbackRate")
+    @Retry(name = "fxProvider", fallbackMethod = "fallbackRate")
+    @CircuitBreaker(name = "fxProvider")
     public BigDecimal getRate(String fromCurrency, String targetCurrency, LocalDate date) {
         BigDecimal rate = client.fetchRate(fromCurrency, targetCurrency, date);
         lastKnownRates.put(new FxRateKey(fromCurrency, targetCurrency, date), rate);

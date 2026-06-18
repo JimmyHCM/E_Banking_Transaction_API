@@ -52,7 +52,8 @@ jobs:
             java -version
             sudo systemctl start docker || true
             docker version
-            docker info | head -n 20
+            # No `| head`: under `pipefail` a closed pipe makes docker info exit 141.
+            docker info
 
       - restore_cache:
           keys:

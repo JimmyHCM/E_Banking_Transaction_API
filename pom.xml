@@ -190,6 +190,24 @@
                     </execution>
                 </executions>
             </plugin>
+            <!--
+                Failsafe runs the *IT integration tests (TransactionFlowIT) during the
+                integration-test/verify phases. Surefire (unit tests) only matches *Test,
+                so without this the Testcontainers IT would never run in `mvn verify`.
+                Version is managed by spring-boot-starter-parent.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 

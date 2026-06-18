@@ -27,6 +27,9 @@ conversion and credit/debit totals.
 The read table is a **rebuildable projection** of the Kafka topic — drop it and
 replay from offset 0 to rebuild (the projector's `save` is an idempotent upsert).
 
+C4 diagrams (PlantUML): [docs/c4-context.puml](docs/c4-context.puml) (system context)
+and [docs/c4-container.puml](docs/c4-container.puml) (containers).
+
 ## Tech stack
 
 - Java 21 (LTS), Spring Boot 3.3.5
@@ -127,3 +130,22 @@ Interactive docs: `/swagger-ui.html` · OpenAPI: [openapi.yaml](openapi.yaml) / 
 | `TransactionSecurityTest`     | slice| JWT/scope enforcement, IDOR prevention                      |
 | `TransactionContractTest`     | slice| Request validation + response contract                      |
 | `TransactionFlowIT`           | IT   | End-to-end Kafka → projection → API (Testcontainers + WireMock) |
+
+Unit tests run under Surefire (`mvn test`); the integration test is an `*IT` class
+run under Failsafe (`mvn verify`) and requires a Docker daemon for Testcontainers.
+
+## Continuous integration
+
+[CircleCI](.circleci/config.yml) runs `./mvnw clean verify` on every push — this
+executes the unit tests **and** the Testcontainers integration test (real Kafka +
+PostgreSQL containers, WireMock for the FX provider) on the `machine` executor.
+JUnit results appear in the CircleCI *Tests* tab; the JaCoCo coverage report is
+stored as a build artifact.
+
+> **Setup:** connect this repository at https://app.circleci.com (Projects → Set
+> Up Project → use the existing `.circleci/config.yml`). After the first green run,
+> add the status badge here:
+>
+> ```
+> [![CircleCI](https://dl.circleci.com/status-badge/img/gh/JimmyHCM/E_Banking_Transaction_API/tree/main.svg?style=svg)](https://app.circleci.com/pipelines/github/JimmyHCM/E_Banking_Transaction_API)
+> ```

@@ -1,0 +1,75 @@
+version: 2.1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CI for the e-Banking Transaction API.
+#
+# Runs unit tests (Surefire) AND the Testcontainers integration test (Failsafe,
+# TransactionFlowIT) in a single `./mvnw clean verify`.
+#
+# We use the `machine` executor rather than a `docker` executor because the
+# integration test spins up real Kafka + PostgreSQL containers via Testcontainers,
+# which needs a local Docker daemon with host port mapping — something
+# setup_remote_docker does not provide reliably.
+# ─────────────────────────────────────────────────────────────────────────────
+
+jobs:
+  build-and-test:
+    machine:
+      image: ubuntu-2204:current
+    resource_class: large
+    environment:
+      JAVA_HOME: /usr/lib/jvm/temurin-21-jdk-amd64
+      # Make the JVM respect the CI container's memory limits.
+      MAVEN_OPTS: -XX:MaxRAMPercentage=70.0
+    steps:
+      - checkout
+
+      - run:
+          name: Install Temurin JDK 21
+          command: |
+            sudo mkdir -p /etc/apt/keyrings
+            wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public \
+              | sudo gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg
+            echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME/{print$2}' /etc/os-release) main" \
+              | sudo tee /etc/apt/sources.list.d/adoptium.list
+            sudo apt-get update
+            sudo apt-get install -y temurin-21-jdk
+            echo 'export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk-amd64' >> "$BASH_ENV"
+            echo 'export PATH=$JAVA_HOME/bin:$PATH' >> "$BASH_ENV"
+
+      - run:
+          name: Java version
+          command: java -version
+
+      - restore_cache:
+          keys:
+            - maven-v1-{{ checksum "pom.xml" }}
+            - maven-v1-
+
+      - run:
+          name: Build, unit tests + integration tests
+          command: ./mvnw -B -ntp clean verify
+
+      - save_cache:
+          key: maven-v1-{{ checksum "pom.xml" }}
+          paths:
+            - ~/.m2/repository
+
+      # Surface JUnit results in the CircleCI "Tests" tab.
+      - store_test_results:
+          path: target/surefire-reports
+      - store_test_results:
+          path: target/failsafe-reports
+
+      # Keep the JaCoCo coverage report and the built jar as build artifacts.
+      - store_artifacts:
+          path: target/site/jacoco
+          destination: coverage
+      - store_artifacts:
+          path: target
+          destination: build
+
+workflows:
+  ci:
+    jobs:
+      - build-and-test
